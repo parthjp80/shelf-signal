@@ -3,7 +3,7 @@ import * as XLSX from 'xlsx';
 import Papa from 'papaparse';
 import {
   Upload, Trash2, TrendingUp, AlertTriangle, CheckCircle2, MapPin,
-  Sparkles, PackageX, ChevronDown, ChevronRight, ClipboardCopy, RefreshCw
+  Sparkles, PackageX, ChevronDown, ChevronRight, ClipboardCopy, RefreshCw, Layers
 } from 'lucide-react';
 
 /* ---------------------------------- helpers ---------------------------------- */
@@ -77,7 +77,9 @@ function categoryColor(category) {
 const money = (v) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(v || 0);
 const pct = (v) => `${((v || 0) * 100).toFixed(1)}%`;
 
-function readFile(file) {
+// Reads every tab in a workbook (or the single table in a CSV) and returns
+// them as separate "sheets" so the caller can pick which one holds real data.
+function readWorkbookSheets(file) {
   return new Promise((resolve, reject) => {
     const name = file.name.toLowerCase();
     const reader = new FileReader();
@@ -86,7 +88,7 @@ function readFile(file) {
         Papa.parse(e.target.result, {
           header: true,
           skipEmptyLines: true,
-          complete: (res) => resolve({ headers: res.meta.fields || [], rows: res.data }),
+          complete: (res) => resolve([{ name: 'Sheet1', headers: res.meta.fields || [], rows: res.data }]),
           error: reject,
         });
       };
@@ -96,10 +98,13 @@ function readFile(file) {
       reader.onload = (e) => {
         try {
           const wb = XLSX.read(e.target.result, { type: 'binary' });
-          const sheet = wb.Sheets[wb.SheetNames[0]];
-          const json = XLSX.utils.sheet_to_json(sheet, { defval: '' });
-          const headers = json.length ? Object.keys(json[0]) : [];
-          resolve({ headers, rows: json });
+          const sheets = wb.SheetNames.map((sheetName) => {
+            const sheet = wb.Sheets[sheetName];
+            const json = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+            const headers = json.length ? Object.keys(json[0]) : [];
+            return { name: sheetName, headers, rows: json };
+          });
+          resolve(sheets);
         } catch (err) { reject(err); }
       };
       reader.onerror = reject;
@@ -108,8 +113,14 @@ function readFile(file) {
   });
 }
 
+function getActiveSheet(location) {
+  return location.sheets.find((s) => s.name === location.activeSheet) || location.sheets[0];
+}
+
 function aggregateLocation(location) {
-  const { rows, mapping } = location;
+  const sheet = getActiveSheet(location);
+  const rows = sheet.rows;
+  const mapping = location.mappingsBySheet[sheet.name] || {};
   const map = new Map();
   let totalRevenue = 0;
   let totalUnits = 0;
@@ -169,6 +180,7 @@ function aggregateLocation(location) {
   return {
     items, totalRevenue, totalUnits, skuCount: items.length, categoryMix, hasCost,
     totalMargin: hasCost ? totalRevenue - totalCost : null,
+    rowCount: rows.length,
   };
 }
 
@@ -306,14 +318,32 @@ export default function App() {
     const files = Array.from(fileList || []);
     for (const file of files) {
       try {
-        const { headers, rows } = await readFile(file);
-        const mapping = guessMapping(headers);
+        const sheets = await readWorkbookSheets(file);
+        if (!sheets.length) {
+          setToast(`${file.name} has no readable sheets.`);
+          setTimeout(() => setToast(''), 4000);
+          continue;
+        }
+        // Auto-pick the sheet most likely to hold SKU-level data: the one
+        // with the most rows (a "Summary" tab is usually much shorter).
+        const defaultSheet = sheets.reduce((best, s) => (s.rows.length > best.rows.length ? s : best), sheets[0]);
+        const mappingsBySheet = {};
+        sheets.forEach((s) => { mappingsBySheet[s.name] = guessMapping(s.headers); });
+
         const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         const name = file.name.replace(/\.(csv|xlsx|xls)$/i, '');
-        const newLoc = { id, name, fileName: file.name, headers, rows, mapping, uploadedAt: new Date().toISOString() };
+        const newLoc = {
+          id, name, fileName: file.name,
+          sheets, activeSheet: defaultSheet.name, mappingsBySheet,
+          uploadedAt: new Date().toISOString(),
+        };
         setLocations((prev) => [...prev, newLoc]);
         setActiveId(id);
         setTab('detail');
+        if (sheets.length > 1) {
+          setToast(`${file.name} has ${sheets.length} tabs — using "${defaultSheet.name}". Switch tabs above the table if needed.`);
+          setTimeout(() => setToast(''), 6000);
+        }
       } catch (e) {
         setToast(`Couldn't read ${file.name} — check it's a valid CSV or Excel export.`);
         setTimeout(() => setToast(''), 4000);
@@ -322,7 +352,15 @@ export default function App() {
   }
 
   function updateMapping(id, field, header) {
-    setLocations((prev) => prev.map((l) => (l.id === id ? { ...l, mapping: { ...l.mapping, [field]: header } } : l)));
+    setLocations((prev) => prev.map((l) => {
+      if (l.id !== id) return l;
+      const sheetName = l.activeSheet;
+      return { ...l, mappingsBySheet: { ...l.mappingsBySheet, [sheetName]: { ...l.mappingsBySheet[sheetName], [field]: header } } };
+    }));
+  }
+
+  function switchSheet(id, sheetName) {
+    setLocations((prev) => prev.map((l) => (l.id === id ? { ...l, activeSheet: sheetName } : l)));
   }
 
   function renameLocation(id, name) {
@@ -433,7 +471,7 @@ export default function App() {
         .ss-cta { margin-top: 8px; display: flex; align-items: center; gap: 8px; background: var(--teal); color: white; border: none; padding: 10px 18px; border-radius: 8px; font-weight: 600; font-size: 13.5px; cursor: pointer; }
         .ss-cta:hover { background: var(--teal-deep); }
 
-        .ss-header-row { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 18px; gap: 16px; }
+        .ss-header-row { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 12px; gap: 16px; }
         .ss-loc-name-input {
           font-family: 'Space Grotesk', sans-serif; font-size: 22px; font-weight: 700; border: none; background: none;
           color: var(--ink); padding: 0; width: 100%; outline: none; border-bottom: 2px solid transparent;
@@ -445,6 +483,10 @@ export default function App() {
         .ss-icon-btn:hover { background: #DFEAE7; }
 
         .ss-tier-badge { font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 20px; text-transform: uppercase; letter-spacing: 0.04em; }
+
+        .ss-sheet-row { display: flex; align-items: center; gap: 8px; margin-bottom: 18px; }
+        .ss-sheet-row label { font-size: 11.5px; font-weight: 600; color: var(--ink-soft); display: flex; align-items: center; gap: 5px; }
+        .ss-sheet-row select { padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line); font-size: 12.5px; background: white; color: var(--ink); font-weight: 600; }
 
         .ss-kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 22px; }
         .ss-kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
@@ -492,7 +534,7 @@ export default function App() {
         .ss-insight-item b { color: var(--ink); }
         .ss-insight-item .ss-sub { color: var(--ink-soft); font-size: 11.5px; margin-top: 3px; }
 
-        .ss-toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #142229; color: white; padding: 10px 18px; border-radius: 8px; font-size: 12.5px; z-index: 50; }
+        .ss-toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #142229; color: white; padding: 10px 18px; border-radius: 8px; font-size: 12.5px; z-index: 50; max-width: 480px; text-align: center; }
         .ss-hint { font-size: 11.5px; color: var(--ink-soft); margin-top: -4px; margin-bottom: 14px; }
         .ss-select-msg { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--ink-soft); font-size: 14px; }
       `}</style>
@@ -561,8 +603,8 @@ export default function App() {
               <h3>Upload your first location report</h3>
               <p>
                 Drop in a sales / inventory-sold export (CSV or Excel) from any cooler location.
-                Shelf Signal auto-detects your columns — you can adjust the mapping if needed.
-                Typical columns look like:
+                If your file has multiple tabs, Shelf Signal reads all of them and defaults to
+                the one with the most rows — usually the detailed data, not a summary tab.
               </p>
               <div className="ss-empty-cols">
                 {['SKU', 'Product Name', 'Category', 'Units Sold', 'Revenue', 'Unit Cost (optional)'].map((c) => (
@@ -587,6 +629,7 @@ export default function App() {
               mappingOpen={mappingOpenFor === activeLocation.id}
               onToggleMapping={() => setMappingOpenFor(mappingOpenFor === activeLocation.id ? null : activeLocation.id)}
               onUpdateMapping={(field, header) => updateMapping(activeLocation.id, field, header)}
+              onSwitchSheet={(sheetName) => switchSheet(activeLocation.id, sheetName)}
               onRename={(name) => renameLocation(activeLocation.id, name)}
               onCopy={() => copySummary(activeLocation, activeAnalysis)}
               copied={copiedId === activeLocation.id}
@@ -606,16 +649,19 @@ export default function App() {
 
 /* ---------------------------------- subviews ---------------------------------- */
 
-function LocationDetail({ location, analysis, tierEntry, mappingOpen, onToggleMapping, onUpdateMapping, onRename, onCopy, copied }) {
+function LocationDetail({ location, analysis, tierEntry, mappingOpen, onToggleMapping, onUpdateMapping, onSwitchSheet, onRename, onCopy, copied }) {
   const tierColor = tierEntry?.tier === 'High' ? { c: '#3F7A5C', bg: '#E9F2EC' } : tierEntry?.tier === 'Mid' ? { c: '#B4791F', bg: '#FBF0DD' } : { c: '#8B5E83', bg: '#F2ECF1' };
-  const unmapped = ['sku', 'product', 'units', 'revenue'].filter((f) => !location.mapping[f]);
+  const sheet = getActiveSheet(location);
+  const mapping = location.mappingsBySheet[sheet.name] || {};
+  const unmapped = ['sku', 'product', 'units', 'revenue'].filter((f) => !mapping[f]);
+  const hasMultipleSheets = location.sheets.length > 1;
 
   return (
     <div>
       <div className="ss-header-row">
         <div style={{ flex: 1, minWidth: 0 }}>
           <input className="ss-loc-name-input" value={location.name} onChange={(e) => onRename(e.target.value)} />
-          <div className="ss-loc-sub">{location.fileName} · {location.rows.length} rows</div>
+          <div className="ss-loc-sub">{location.fileName} · {sheet.rows.length} rows{hasMultipleSheets ? ` on "${sheet.name}"` : ''}</div>
         </div>
         <div className="ss-header-actions">
           {tierEntry && <span className="ss-tier-badge" style={{ color: tierColor.c, background: tierColor.bg }}>{tierEntry.tier} tier</span>}
@@ -623,6 +669,17 @@ function LocationDetail({ location, analysis, tierEntry, mappingOpen, onToggleMa
           <button className="ss-icon-btn" onClick={onToggleMapping}>{mappingOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />} Column mapping</button>
         </div>
       </div>
+
+      {hasMultipleSheets && (
+        <div className="ss-sheet-row">
+          <label><Layers size={13} /> Tab:</label>
+          <select value={location.activeSheet} onChange={(e) => onSwitchSheet(e.target.value)}>
+            {location.sheets.map((s) => (
+              <option key={s.name} value={s.name}>{s.name} ({s.rows.length} rows)</option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {unmapped.length > 0 && !mappingOpen && (
         <div className="ss-hint" style={{ color: '#B23E1F' }}>
@@ -637,9 +694,9 @@ function LocationDetail({ location, analysis, tierEntry, mappingOpen, onToggleMa
             {Object.keys(FIELD_LABELS).map((field) => (
               <div className="ss-map-field" key={field}>
                 <label>{FIELD_LABELS[field]}</label>
-                <select value={location.mapping[field] || ''} onChange={(e) => onUpdateMapping(field, e.target.value)}>
+                <select value={mapping[field] || ''} onChange={(e) => onUpdateMapping(field, e.target.value)}>
                   <option value="">— none —</option>
-                  {location.headers.map((h) => <option key={h} value={h}>{h}</option>)}
+                  {sheet.headers.map((h) => <option key={h} value={h}>{h}</option>)}
                 </select>
               </div>
             ))}
