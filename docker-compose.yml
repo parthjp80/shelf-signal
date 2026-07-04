@@ -1,0 +1,13 @@
+services:
+  shelf-signal:
+    build: .
+    image: shelf-signal:latest
+    container_name: shelf-signal
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      # Persists all uploaded location reports across container restarts/rebuilds.
+      # On TrueNAS SCALE, point this at a dataset path instead, e.g.:
+      # - /mnt/YOUR_POOL/apps/shelf-signal/data:/app/data
+      - ./data:/app/data
