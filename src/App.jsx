@@ -9,12 +9,12 @@ import {
 /* ---------------------------------- helpers ---------------------------------- */
 
 const FIELD_KEYWORDS = {
-  sku: ['sku', 'item number', 'item id', 'upc', 'plu', 'item no', 'item #'],
+  sku: ['sku', 'item number', 'item id', 'upc', 'plu', 'item no', 'item #', 'product barcode', 'barcode'],
   product: ['product name', 'product', 'item description', 'description', 'item name', 'name'],
-  category: ['category', 'dept', 'department', 'type', 'segment'],
+  category: ['category', 'dept', 'department', 'type', 'segment', 'brand'],
   units: ['units sold', 'qty sold', 'quantity sold', 'units', 'qty', 'quantity', 'sold', 'sales qty'],
-  revenue: ['net sales', 'total sales', 'revenue', 'sales $', 'sales', 'amount', 'total revenue', 'gross sales'],
-  cost: ['unit cost', 'cost', 'cogs', 'cost per unit'],
+  revenue: ['net sales', 'total sales', 'revenue', 'sales $', 'sales', 'amount', 'total revenue', 'gross sales', 'sales amount'],
+  cost: ['unit cost', 'cost', 'cogs', 'cost per unit', 'unit price'],
 };
 
 const FIELD_LABELS = {
