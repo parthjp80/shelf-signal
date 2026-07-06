@@ -31,14 +31,18 @@ function titleCase(s) {
   return s.replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-// Looks up a product name against Open Food Facts (free, no API key) and
-// buckets the result into our own category taxonomy where possible.
+// Looks up a product name against Open Food Facts' search-a-licious API
+// (free, no API key) and buckets the result into our own category taxonomy
+// where possible. Note: the legacy world.openfoodfacts.org search endpoints
+// (cgi/search.pl, /api/v2/search) reject anonymous/bot traffic with a 503 —
+// search.openfoodfacts.org is the separate host that still allows it.
 async function lookupProductCategory(name) {
-  const url = `https://world.openfoodfacts.org/cgi/search.pl?json=1&page_size=1&search_terms=${encodeURIComponent(name)}`;
+  const fields = 'product_name,generic_name,categories,categories_tags';
+  const url = `https://search.openfoodfacts.org/search?q=${encodeURIComponent(name)}&page_size=1&fields=${fields}`;
   const res = await fetch(url, { headers: { 'User-Agent': 'ShelfSignal/1.0 (inventory categorizer)' } });
   if (!res.ok) return null;
   const data = await res.json();
-  const product = data.products && data.products[0];
+  const product = data.hits && data.hits[0];
   if (!product) return null;
 
   const descriptiveText = [product.categories, product.product_name, product.generic_name].filter(Boolean).join(' ');
