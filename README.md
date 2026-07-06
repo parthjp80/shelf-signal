@@ -67,10 +67,15 @@ npm run build && npm start   # or just: node server/server.js (after a build)
   - Shows a "Tab" dropdown if the file has multiple sheets — switch manually if needed
   - Lets you fix column mappings if auto-detect misses something
 - **Backend** (`server/server.js`): a small Express server that serves the built frontend
-  and exposes two endpoints:
+  and exposes these endpoints:
   - `GET /api/locations` — returns all saved location reports
   - `POST /api/locations` — overwrites the saved data (the frontend sends the full set
     whenever something changes)
+  - `POST /api/categorize` — looks up categories for product names with no mapped
+    category column, via [Open Food Facts](https://world.openfoodfacts.org) (free, no
+    API key). Results are cached to `/app/data/category-cache.json` so the same product
+    name is never looked up twice. Requires the container to have outbound internet
+    access; if it doesn't, this silently falls back to the local keyword guesser.
   - Data is stored as plain JSON at `/app/data/locations.json` inside the container — back
     up that file (or the whole mounted volume) if you want a copy outside the container.
 

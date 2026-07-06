@@ -16,6 +16,7 @@ RUN npm install --omit=dev
 
 COPY --from=build /app/dist ./dist
 COPY server ./server
+COPY src/lib ./src/lib
 
 # Data directory for persisted reports (mount a volume here)
 RUN mkdir -p /app/data

@@ -5,6 +5,7 @@ import {
   Upload, Trash2, TrendingUp, AlertTriangle, CheckCircle2, MapPin,
   Sparkles, PackageX, ChevronDown, ChevronRight, ClipboardCopy, RefreshCw, Layers
 } from 'lucide-react';
+import { normalizeHeader, guessCategoryFromProduct } from './lib/categorize.js';
 
 /* ---------------------------------- helpers ---------------------------------- */
 
@@ -36,10 +37,6 @@ const FLAG_META = {
   watch:  { label: 'Watch',         color: '#B4791F', bg: '#FBF0DD' },
   cut:    { label: 'Cut candidate', color: '#B23E1F', bg: '#FBEAE4' },
 };
-
-function normalizeHeader(h) {
-  return String(h || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-}
 
 function guessMapping(headers) {
   const used = new Set();
@@ -74,43 +71,6 @@ function hashString(str) {
 
 function categoryColor(category) {
   return PALETTE[hashString(category || 'Uncategorized') % PALETTE.length];
-}
-
-// Fallback classifier: infer a category from the product name itself when no
-// category/brand column is available (or the cell is blank for that row).
-// Order matters — more specific/branded keywords are listed before generic
-// catch-alls (e.g. "snickers" before the bare "bar" in Bars) so a product
-// like "Snickers Bar" resolves to Candy rather than Bars.
-const PRODUCT_CATEGORY_KEYWORDS = {
-  'Drinks': ['soda', 'cola', 'pepsi', 'coke', 'sprite', 'juice', 'drink', 'beverage', 'tea', 'lemonade',
-    'gatorade', 'powerade', 'water', 'sparkling', 'seltzer', 'energy drink', 'red bull', 'redbull',
-    'monster', 'iced coffee', 'coffee', 'smoothie', 'kombucha'],
-  'Chips': ['chip', 'crisp', 'tortilla', 'doritos', 'lays', "lay's", 'pringles', 'fritos', 'cheetos',
-    'sun chips', 'popcorn', 'pretzel'],
-  'Candy': ['candy', 'chocolate', 'gummy', 'gummies', 'snickers', 'skittles', 'm&m', "reese's", 'reeses',
-    'twix', 'kitkat', 'kit kat', 'sour patch', 'starburst', 'mint', 'gum', 'licorice', 'jelly bean'],
-  'Cookies': ['cookie', 'oreo', 'wafer'],
-  'Crackers': ['cracker', 'ritz', 'goldfish', "cheez-it", 'cheez it'],
-  'Nuts & Trail Mix': ['almond', 'peanut', 'cashew', 'trail mix', 'pistachio', 'nut'],
-  'Jerky & Meat Snacks': ['jerky', 'meat stick', 'slim jim'],
-  'Ice Cream & Frozen': ['ice cream', 'popsicle', 'frozen'],
-  'Bakery': ['muffin', 'donut', 'doughnut', 'pastry', 'danish', 'bun'],
-  'Bars': ['granola bar', 'protein bar', 'energy bar', 'snack bar', 'cereal bar', 'bar'],
-};
-
-// Matches keyword at a word boundary (start of a token), tolerating simple
-// plurals like "donut" -> "donuts". Deliberately NOT a plain substring test:
-// naive .includes() matched "cola" inside "chocolate" and "nut" inside "donuts".
-function guessCategoryFromProduct(productName) {
-  const norm = normalizeHeader(productName);
-  if (!norm) return '';
-  for (const [category, keywords] of Object.entries(PRODUCT_CATEGORY_KEYWORDS)) {
-    for (const k of keywords) {
-      const kn = normalizeHeader(k);
-      if (kn && new RegExp(`(^|\\s)${kn}`).test(norm)) return category;
-    }
-  }
-  return '';
 }
 
 const money = (v) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(v || 0);
@@ -188,7 +148,7 @@ function getActiveSheet(location) {
   return location.sheets.find((s) => s.name === location.activeSheet) || location.sheets[0];
 }
 
-function aggregateLocation(location) {
+function aggregateLocation(location, categoryOverrides = {}) {
   const sheet = getActiveSheet(location);
   const rows = sheet.rows;
   const mapping = location.mappingsBySheet[sheet.name] || {};
@@ -202,15 +162,14 @@ function aggregateLocation(location) {
     const productRaw = mapping.product ? row[mapping.product] : (mapping.sku ? row[mapping.sku] : '');
     const product = String(productRaw || '').trim() || 'Unlisted item';
     const sku = mapping.sku ? String(row[mapping.sku] || '').trim() : '';
-    // Use category if mapped, otherwise brand, otherwise guess from the product
-    // name (e.g. "drink", "chips", "bars"), otherwise "Uncategorized"
+    // Priority: mapped category column, then an internet product-name lookup
+    // (categoryOverrides, populated async via /api/categorize), then a local
+    // keyword guess from the name, then brand as a last resort, then "Uncategorized".
     let category = '';
-    if (mapping.category) {
-      category = String(row[mapping.category] || '').trim();
-    } else if (mapping.brand) {
-      category = String(row[mapping.brand] || '').trim();
-    }
+    if (mapping.category) category = String(row[mapping.category] || '').trim();
+    if (!category) category = categoryOverrides[product.toLowerCase()] || '';
     if (!category) category = guessCategoryFromProduct(product);
+    if (!category && mapping.brand) category = String(row[mapping.brand] || '').trim();
     if (!category) category = 'Uncategorized';
     const units = mapping.units ? parseNumber(row[mapping.units]) : 0;
     const revenue = mapping.revenue ? parseNumber(row[mapping.revenue]) : 0;
@@ -386,11 +345,47 @@ export default function App() {
     }).catch((e) => console.error('Failed to save locations', e));
   }, [locations, hydrated]);
 
+  // Category lookups for products with no mapped category column, keyed by
+  // lowercased product name. A value of null means the lookup ran and found
+  // nothing (so we stop retrying it, and fall through to the local keyword guess).
+  const [categoryOverrides, setCategoryOverrides] = useState({});
+
+  useEffect(() => {
+    const needsLookup = new Set();
+    locations.forEach((loc) => {
+      const sheet = getActiveSheet(loc);
+      if (!sheet) return;
+      const mapping = loc.mappingsBySheet[sheet.name] || {};
+      if (mapping.category) return; // real category column already covers this location
+      sheet.rows.forEach((row) => {
+        const productRaw = mapping.product ? row[mapping.product] : (mapping.sku ? row[mapping.sku] : '');
+        const product = String(productRaw || '').trim();
+        if (product && !(product.toLowerCase() in categoryOverrides)) needsLookup.add(product);
+      });
+    });
+    if (!needsLookup.size) return;
+    const names = Array.from(needsLookup).slice(0, 200);
+    fetch('/api/categorize', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ names }),
+    })
+      .then((res) => (res.ok ? res.json() : {}))
+      .then((results) => {
+        setCategoryOverrides((prev) => {
+          const next = { ...prev };
+          Object.entries(results).forEach(([name, category]) => { next[name.toLowerCase()] = category || null; });
+          return next;
+        });
+      })
+      .catch((e) => console.error('Category lookup failed', e));
+  }, [locations, categoryOverrides]);
+
   const analysisByLocation = useMemo(() => {
     const out = {};
-    locations.forEach((loc) => { out[loc.id] = aggregateLocation(loc); });
+    locations.forEach((loc) => { out[loc.id] = aggregateLocation(loc, categoryOverrides); });
     return out;
-  }, [locations]);
+  }, [locations, categoryOverrides]);
 
   const rollup = useMemo(() => computeRollup(locations, analysisByLocation), [locations, analysisByLocation]);
 
