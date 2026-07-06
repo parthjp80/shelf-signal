@@ -63,6 +63,15 @@ function parseNumber(v) {
   return isNaN(n) ? 0 : n;
 }
 
+// Many POS/inventory exports include a trailing "Total"/"Grand Total"/"Subtotal"
+// row. Left in, it gets counted as a fake SKU with no product name and a huge
+// revenue figure (often near 50% of the reported total, since it duplicates
+// the sum of every real row). Skip any row where a cell is exactly one of these.
+const TOTAL_ROW_PATTERN = /^(grand\s*total|sub\s*total|subtotal|total)\s*:?$/i;
+function isTotalRow(row) {
+  return Object.values(row).some((v) => TOTAL_ROW_PATTERN.test(String(v || '').trim()));
+}
+
 function hashString(str) {
   let hash = 0;
   for (let i = 0; i < str.length; i++) hash = (hash * 31 + str.charCodeAt(i)) | 0;
@@ -159,17 +168,19 @@ function aggregateLocation(location, categoryOverrides = {}) {
   let totalCost = 0;
 
   rows.forEach((row) => {
+    if (isTotalRow(row)) return;
     const productRaw = mapping.product ? row[mapping.product] : (mapping.sku ? row[mapping.sku] : '');
     const product = String(productRaw || '').trim() || 'Unlisted item';
     const sku = mapping.sku ? String(row[mapping.sku] || '').trim() : '';
     // Priority: mapped category column, then an internet product-name lookup
     // (categoryOverrides, populated async via /api/categorize), then a local
-    // keyword guess from the name, then brand as a last resort, then "Uncategorized".
+    // keyword guess from the name, then "Uncategorized". Brand is deliberately
+    // NOT used as a category proxy — brand data is often unreliable (e.g. a
+    // "Brand" column that actually contains the product name).
     let category = '';
     if (mapping.category) category = String(row[mapping.category] || '').trim();
     if (!category) category = categoryOverrides[product.toLowerCase()] || '';
     if (!category) category = guessCategoryFromProduct(product);
-    if (!category && mapping.brand) category = String(row[mapping.brand] || '').trim();
     if (!category) category = 'Uncategorized';
     const units = mapping.units ? parseNumber(row[mapping.units]) : 0;
     const revenue = mapping.revenue ? parseNumber(row[mapping.revenue]) : 0;
@@ -357,6 +368,7 @@ export default function App() {
       if (!sheet) return;
       const mapping = loc.mappingsBySheet[sheet.name] || {};
       sheet.rows.forEach((row) => {
+        if (isTotalRow(row)) return;
         // Skip rows that already have a real category value from the mapped
         // column — only rows with a blank/missing category need a lookup.
         const mappedCategory = mapping.category ? String(row[mapping.category] || '').trim() : '';
