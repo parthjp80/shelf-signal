@@ -76,6 +76,43 @@ function categoryColor(category) {
   return PALETTE[hashString(category || 'Uncategorized') % PALETTE.length];
 }
 
+// Fallback classifier: infer a category from the product name itself when no
+// category/brand column is available (or the cell is blank for that row).
+// Order matters — more specific/branded keywords are listed before generic
+// catch-alls (e.g. "snickers" before the bare "bar" in Bars) so a product
+// like "Snickers Bar" resolves to Candy rather than Bars.
+const PRODUCT_CATEGORY_KEYWORDS = {
+  'Drinks': ['soda', 'cola', 'pepsi', 'coke', 'sprite', 'juice', 'drink', 'beverage', 'tea', 'lemonade',
+    'gatorade', 'powerade', 'water', 'sparkling', 'seltzer', 'energy drink', 'red bull', 'redbull',
+    'monster', 'iced coffee', 'coffee', 'smoothie', 'kombucha'],
+  'Chips': ['chip', 'crisp', 'tortilla', 'doritos', 'lays', "lay's", 'pringles', 'fritos', 'cheetos',
+    'sun chips', 'popcorn', 'pretzel'],
+  'Candy': ['candy', 'chocolate', 'gummy', 'gummies', 'snickers', 'skittles', 'm&m', "reese's", 'reeses',
+    'twix', 'kitkat', 'kit kat', 'sour patch', 'starburst', 'mint', 'gum', 'licorice', 'jelly bean'],
+  'Cookies': ['cookie', 'oreo', 'wafer'],
+  'Crackers': ['cracker', 'ritz', 'goldfish', "cheez-it", 'cheez it'],
+  'Nuts & Trail Mix': ['almond', 'peanut', 'cashew', 'trail mix', 'pistachio', 'nut'],
+  'Jerky & Meat Snacks': ['jerky', 'meat stick', 'slim jim'],
+  'Ice Cream & Frozen': ['ice cream', 'popsicle', 'frozen'],
+  'Bakery': ['muffin', 'donut', 'doughnut', 'pastry', 'danish', 'bun'],
+  'Bars': ['granola bar', 'protein bar', 'energy bar', 'snack bar', 'cereal bar', 'bar'],
+};
+
+// Matches keyword at a word boundary (start of a token), tolerating simple
+// plurals like "donut" -> "donuts". Deliberately NOT a plain substring test:
+// naive .includes() matched "cola" inside "chocolate" and "nut" inside "donuts".
+function guessCategoryFromProduct(productName) {
+  const norm = normalizeHeader(productName);
+  if (!norm) return '';
+  for (const [category, keywords] of Object.entries(PRODUCT_CATEGORY_KEYWORDS)) {
+    for (const k of keywords) {
+      const kn = normalizeHeader(k);
+      if (kn && new RegExp(`(^|\\s)${kn}`).test(norm)) return category;
+    }
+  }
+  return '';
+}
+
 const money = (v) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(v || 0);
 const pct = (v) => `${((v || 0) * 100).toFixed(1)}%`;
 
@@ -165,13 +202,16 @@ function aggregateLocation(location) {
     const productRaw = mapping.product ? row[mapping.product] : (mapping.sku ? row[mapping.sku] : '');
     const product = String(productRaw || '').trim() || 'Unlisted item';
     const sku = mapping.sku ? String(row[mapping.sku] || '').trim() : '';
-    // Use category if mapped, otherwise fall back to brand if mapped, otherwise "Uncategorized"
-    let category = 'Uncategorized';
+    // Use category if mapped, otherwise brand, otherwise guess from the product
+    // name (e.g. "drink", "chips", "bars"), otherwise "Uncategorized"
+    let category = '';
     if (mapping.category) {
-      category = String(row[mapping.category] || '').trim() || 'Uncategorized';
+      category = String(row[mapping.category] || '').trim();
     } else if (mapping.brand) {
-      category = String(row[mapping.brand] || '').trim() || 'Uncategorized';
+      category = String(row[mapping.brand] || '').trim();
     }
+    if (!category) category = guessCategoryFromProduct(product);
+    if (!category) category = 'Uncategorized';
     const units = mapping.units ? parseNumber(row[mapping.units]) : 0;
     const revenue = mapping.revenue ? parseNumber(row[mapping.revenue]) : 0;
     const unitCost = mapping.cost ? parseNumber(row[mapping.cost]) : 0;
