@@ -31,6 +31,8 @@ const FIELD_LABELS = {
   cost: 'Unit cost (optional)',
 };
 
+const COMPANY_NAME = 'NextGen Healthy Mart LLC';
+
 const PALETTE = ['#2E6F7E', '#4C7A5E', '#D6912B', '#C0512B', '#5B6F9E', '#8B5E83', '#7C8452', '#B79A6B'];
 
 const FLAG_META = {
@@ -86,6 +88,15 @@ function categoryColor(category) {
 
 const money = (v) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(v || 0);
 const pct = (v) => `${((v || 0) * 100).toFixed(1)}%`;
+
+// Formats a "YYYY-MM-DD" <input type="date"> value as "Jan 1, 2026".
+// Parsed as UTC to avoid the date shifting a day depending on local timezone.
+function formatDate(iso) {
+  if (!iso) return '';
+  const [y, m, d] = iso.split('-').map(Number);
+  if (!y || !m || !d) return iso;
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' });
+}
 
 // Reads every tab in a workbook (or the single table in a CSV) and returns
 // them as separate "sheets" so the caller can pick which one holds real data.
@@ -289,7 +300,11 @@ function computeRollup(locations, analysisByLocation) {
 
 function buildSummaryText(location, analysis) {
   const lines = [];
+  lines.push(COMPANY_NAME);
   lines.push(`${location.name} — Inventory Summary`);
+  if (location.reportStartDate || location.reportEndDate) {
+    lines.push(`Reporting period: ${formatDate(location.reportStartDate) || '—'} to ${formatDate(location.reportEndDate) || '—'}`);
+  }
   lines.push(`Revenue: ${money(analysis.totalRevenue)} | Units sold: ${analysis.totalUnits} | SKUs: ${analysis.skuCount}`);
   if (analysis.hasCost) lines.push(`Estimated margin: ${money(analysis.totalMargin)}`);
   lines.push('');
@@ -550,6 +565,10 @@ export default function App() {
     setLocations((prev) => prev.map((l) => (l.id === id ? { ...l, name } : l)));
   }
 
+  function updateLocationDates(id, field, value) {
+    setLocations((prev) => prev.map((l) => (l.id === id ? { ...l, [field]: value } : l)));
+  }
+
   function removeLocation(id) {
     setLocations((prev) => prev.filter((l) => l.id !== id));
     if (activeId === id) setActiveId(null);
@@ -667,9 +686,15 @@ export default function App() {
 
         .ss-tier-badge { font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 20px; text-transform: uppercase; letter-spacing: 0.04em; }
 
+        .ss-report-header { margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+        .ss-report-company { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 17px; color: var(--ink); }
+        .ss-report-title { font-size: 13.5px; color: var(--ink-soft); margin-top: 2px; }
+        .ss-report-period { font-size: 12px; color: var(--ink-soft); margin-top: 4px; }
+        .ss-report-generated { font-size: 11px; color: var(--ink-soft); margin-top: 2px; }
+
         .ss-sheet-row { display: flex; align-items: center; gap: 8px; margin-bottom: 18px; }
         .ss-sheet-row label { font-size: 11.5px; font-weight: 600; color: var(--ink-soft); display: flex; align-items: center; gap: 5px; }
-        .ss-sheet-row select { padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line); font-size: 12.5px; background: white; color: var(--ink); font-weight: 600; }
+        .ss-sheet-row select, .ss-sheet-row input[type="date"] { padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line); font-size: 12.5px; background: white; color: var(--ink); font-weight: 600; }
 
         .ss-kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 22px; }
         .ss-kpi { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
@@ -814,6 +839,7 @@ export default function App() {
               onUpdateMapping={(field, header) => updateMapping(activeLocation.id, field, header)}
               onSwitchSheet={(sheetName) => switchSheet(activeLocation.id, sheetName)}
               onRename={(name) => renameLocation(activeLocation.id, name)}
+              onUpdateDates={(field, value) => updateLocationDates(activeLocation.id, field, value)}
               onCopy={() => copySummary(activeLocation, activeAnalysis)}
               copied={copiedId === activeLocation.id}
             />
@@ -832,7 +858,7 @@ export default function App() {
 
 /* ---------------------------------- subviews ---------------------------------- */
 
-function LocationDetail({ location, analysis, tierEntry, mappingOpen, onToggleMapping, onUpdateMapping, onSwitchSheet, onRename, onCopy, copied }) {
+function LocationDetail({ location, analysis, tierEntry, mappingOpen, onToggleMapping, onUpdateMapping, onSwitchSheet, onRename, onUpdateDates, onCopy, copied }) {
   const tierColor = tierEntry?.tier === 'High' ? { c: '#3F7A5C', bg: '#E9F2EC' } : tierEntry?.tier === 'Mid' ? { c: '#B4791F', bg: '#FBF0DD' } : { c: '#8B5E83', bg: '#F2ECF1' };
   const sheet = getActiveSheet(location);
   const mapping = location.mappingsBySheet[sheet.name] || {};
@@ -867,6 +893,13 @@ function LocationDetail({ location, analysis, tierEntry, mappingOpen, onToggleMa
           <button className="ss-icon-btn" onClick={handleDownloadPdf} disabled={pdfBusy}><FileDown size={13} /> {pdfBusy ? 'Generating…' : 'Download PDF'}</button>
           <button className="ss-icon-btn" onClick={onToggleMapping}>{mappingOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />} Column mapping</button>
         </div>
+      </div>
+
+      <div className="ss-sheet-row">
+        <label>Report period:</label>
+        <input type="date" value={location.reportStartDate || ''} onChange={(e) => onUpdateDates('reportStartDate', e.target.value)} />
+        <span style={{ color: 'var(--ink-soft)', fontSize: 12.5 }}>to</span>
+        <input type="date" value={location.reportEndDate || ''} onChange={(e) => onUpdateDates('reportEndDate', e.target.value)} />
       </div>
 
       {hasMultipleSheets && (
@@ -904,6 +937,14 @@ function LocationDetail({ location, analysis, tierEntry, mappingOpen, onToggleMa
       )}
 
       <div ref={reportRef}>
+      <div className="ss-report-header">
+        <div className="ss-report-company">{COMPANY_NAME}</div>
+        <div className="ss-report-title">{location.name} — Inventory Report</div>
+        {(location.reportStartDate || location.reportEndDate) && (
+          <div className="ss-report-period">Reporting period: {formatDate(location.reportStartDate) || '—'} to {formatDate(location.reportEndDate) || '—'}</div>
+        )}
+        <div className="ss-report-generated">Generated {formatDate(new Date().toISOString().slice(0, 10))}</div>
+      </div>
       <div className="ss-kpi-row">
         <div className="ss-kpi"><div className="ss-kpi-label">Revenue</div><div className="ss-kpi-value">{money(analysis.totalRevenue)}</div></div>
         <div className="ss-kpi"><div className="ss-kpi-label">Units sold</div><div className="ss-kpi-value">{analysis.totalUnits.toLocaleString()}</div></div>
@@ -1024,6 +1065,11 @@ function RollupView({ locations, rollup }) {
       )}
 
       <div ref={reportRef}>
+      <div className="ss-report-header">
+        <div className="ss-report-company">{COMPANY_NAME}</div>
+        <div className="ss-report-title">Cross-Location Rollup Report</div>
+        <div className="ss-report-generated">Generated {formatDate(new Date().toISOString().slice(0, 10))}</div>
+      </div>
       <div className="ss-section-title">Revenue by location</div>
       {rollup.list.map((l) => (
         <div className="ss-rollup-bar-row" key={l.id}>

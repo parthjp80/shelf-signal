@@ -11,7 +11,7 @@ your locations by revenue and suggests where premium vs. value SKUs belong.
 - Flags each SKU as a top performer, steady, watch-list, or cut candidate based on velocity & revenue contribution
 - Categorizes products with no category column via an internet lookup (Open Food Facts) with a local keyword fallback
 - Surfaces a **Suggestions** panel per location — concrete, data-backed calls to action (cut candidates, thin-margin items, category concentration risk, etc.), separate from the raw per-SKU flag table
-- **Download PDF**: exports the shelf visualization, category mix, recommendations table, and suggestions as a shareable report (per-location or the cross-location rollup)
+- **Download PDF**: exports the shelf visualization, category mix, recommendations table, and suggestions as a shareable report (per-location or the cross-location rollup), titled with your business name and an editable reporting period
 - Builds cross-location rollups with tier strategy (High/Mid/Value) and expansion/consolidation suggestions
 - Persists all uploaded reports to a JSON file on a mounted Docker volume — survives restarts and is accessible from any device on your network
 
@@ -102,6 +102,8 @@ the most rows. Use the "Tab" dropdown to switch if it picks the wrong one.
 
 ## Notes
 
+- The business name shown on PDF reports is set via the `COMPANY_NAME` constant near the
+  top of `src/App.jsx` — edit it there if it ever needs to change.
 - No authentication is built in — if you expose this beyond your home network (e.g. via
   a reverse proxy), put it behind something like Authelia, Tailscale, or basic auth.
 - Uploaded reports are stored as JSON in `/app/data/locations.json` — back up this file
