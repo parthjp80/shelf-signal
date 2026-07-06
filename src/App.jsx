@@ -79,6 +79,7 @@ const pct = (v) => `${((v || 0) * 100).toFixed(1)}%`;
 
 // Reads every tab in a workbook (or the single table in a CSV) and returns
 // them as separate "sheets" so the caller can pick which one holds real data.
+// Handles reports with title/metadata rows before the actual header row.
 function readWorkbookSheets(file) {
   return new Promise((resolve, reject) => {
     const name = file.name.toLowerCase();
@@ -100,9 +101,40 @@ function readWorkbookSheets(file) {
           const wb = XLSX.read(e.target.result, { type: 'binary' });
           const sheets = wb.SheetNames.map((sheetName) => {
             const sheet = wb.Sheets[sheetName];
-            const json = XLSX.utils.sheet_to_json(sheet, { defval: '' });
-            const headers = json.length ? Object.keys(json[0]) : [];
-            return { name: sheetName, headers, rows: json };
+            // Get all raw values to detect where headers actually are
+            const range = XLSX.utils.decode_range(sheet['!ref'] || 'A1');
+            const allRows = [];
+            for (let r = range.s.r; r <= range.e.r; r++) {
+              const row = [];
+              for (let c = range.s.c; c <= range.e.c; c++) {
+                const cellAddr = XLSX.utils.encode_cell({ r, c });
+                const cell = sheet[cellAddr];
+                row.push(cell ? cell.v : '');
+              }
+              allRows.push(row);
+            }
+
+            // Find the header row: first row where most cells have content and no row above looks like headers
+            let headerRowIdx = 0;
+            for (let i = 0; i < Math.min(5, allRows.length); i++) {
+              const row = allRows[i];
+              const nonEmptyCells = row.filter(c => c && String(c).trim().length > 0).length;
+              // A header row typically has many non-empty cells and text (not numbers)
+              if (nonEmptyCells > 3 && row.some(c => c && String(c).match(/[a-zA-Z]/))) {
+                headerRowIdx = i;
+                break;
+              }
+            }
+
+            // Extract headers and data starting from the detected header row
+            const headers = allRows[headerRowIdx].map(h => String(h || '').trim());
+            const dataRows = allRows.slice(headerRowIdx + 1).map(row => {
+              const obj = {};
+              headers.forEach((h, i) => { obj[h] = row[i] || ''; });
+              return obj;
+            });
+
+            return { name: sheetName, headers, rows: dataRows };
           });
           resolve(sheets);
         } catch (err) { reject(err); }
