@@ -11,7 +11,8 @@ import {
 const FIELD_KEYWORDS = {
   sku: ['sku', 'item number', 'item id', 'upc', 'plu', 'item no', 'item #', 'product barcode', 'barcode'],
   product: ['product name', 'product', 'item description', 'description', 'item name', 'name'],
-  category: ['category', 'dept', 'department', 'type', 'segment', 'brand'],
+  category: ['category', 'dept', 'department', 'type', 'segment'],
+  brand: ['brand', 'manufacturer', 'maker'],
   units: ['units sold', 'qty sold', 'quantity sold', 'units', 'qty', 'quantity', 'sold', 'sales qty'],
   revenue: ['net sales', 'total sales', 'revenue', 'sales $', 'sales', 'amount', 'total revenue', 'gross sales', 'sales amount'],
   cost: ['unit cost', 'cost', 'cogs', 'cost per unit', 'unit price'],
@@ -20,7 +21,8 @@ const FIELD_KEYWORDS = {
 const FIELD_LABELS = {
   sku: 'SKU / Item #',
   product: 'Product name',
-  category: 'Category',
+  category: 'Category (optional)',
+  brand: 'Brand (use if no category)',
   units: 'Units sold',
   revenue: 'Revenue',
   cost: 'Unit cost (optional)',
@@ -42,7 +44,7 @@ function normalizeHeader(h) {
 function guessMapping(headers) {
   const used = new Set();
   const mapping = {};
-  ['sku', 'product', 'category', 'units', 'revenue', 'cost'].forEach((field) => {
+  ['sku', 'product', 'category', 'brand', 'units', 'revenue', 'cost'].forEach((field) => {
     const keywords = FIELD_KEYWORDS[field];
     let found = '';
     for (const h of headers) {
@@ -163,7 +165,13 @@ function aggregateLocation(location) {
     const productRaw = mapping.product ? row[mapping.product] : (mapping.sku ? row[mapping.sku] : '');
     const product = String(productRaw || '').trim() || 'Unlisted item';
     const sku = mapping.sku ? String(row[mapping.sku] || '').trim() : '';
-    const category = mapping.category ? (String(row[mapping.category] || '').trim() || 'Uncategorized') : 'Uncategorized';
+    // Use category if mapped, otherwise fall back to brand if mapped, otherwise "Uncategorized"
+    let category = 'Uncategorized';
+    if (mapping.category) {
+      category = String(row[mapping.category] || '').trim() || 'Uncategorized';
+    } else if (mapping.brand) {
+      category = String(row[mapping.brand] || '').trim() || 'Uncategorized';
+    }
     const units = mapping.units ? parseNumber(row[mapping.units]) : 0;
     const revenue = mapping.revenue ? parseNumber(row[mapping.revenue]) : 0;
     const unitCost = mapping.cost ? parseNumber(row[mapping.cost]) : 0;
@@ -723,9 +731,9 @@ function LocationDetail({ location, analysis, tierEntry, mappingOpen, onToggleMa
         <div className="ss-mapping-panel">
           <div style={{ fontSize: 12, color: 'var(--ink-soft)' }}>Map each field to the matching column from your upload.</div>
           <div className="ss-mapping-grid">
-            {Object.keys(FIELD_LABELS).map((field) => (
+            {Object.entries(FIELD_LABELS).map(([field, label]) => (
               <div className="ss-map-field" key={field}>
-                <label>{FIELD_LABELS[field]}</label>
+                <label>{label}</label>
                 <select value={mapping[field] || ''} onChange={(e) => onUpdateMapping(field, e.target.value)}>
                   <option value="">— none —</option>
                   {sheet.headers.map((h) => <option key={h} value={h}>{h}</option>)}
