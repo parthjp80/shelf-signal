@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import Papa from 'papaparse';
+import jsPDF from 'jspdf';
+import html2canvas from 'html2canvas';
 import {
   Upload, Trash2, TrendingUp, AlertTriangle, CheckCircle2, MapPin,
-  Sparkles, PackageX, ChevronDown, ChevronRight, ClipboardCopy, RefreshCw, Layers
+  Sparkles, PackageX, ChevronDown, ChevronRight, ClipboardCopy, RefreshCw, Layers, FileDown, Lightbulb
 } from 'lucide-react';
 import { normalizeHeader, guessCategoryFromProduct } from './lib/categorize.js';
 
@@ -315,6 +317,97 @@ function buildSummaryText(location, analysis) {
     if (topCat.share > 0.4) lines.push(`Consider diversifying — this category may be overrepresented on the shelf.`);
   }
   return lines.join('\n');
+}
+
+// Actionable, data-backed suggestions for a single location (distinct from the
+// per-SKU flag table — this is the "so what should I actually do" summary).
+function buildSuggestions(analysis) {
+  const { items, categoryMix, hasCost } = analysis;
+  const suggestions = [];
+
+  const cut = items.filter((i) => i.flag === 'cut');
+  const watch = items.filter((i) => i.flag === 'watch');
+  const top = items.filter((i) => i.flag === 'top');
+
+  if (cut.length) {
+    const names = cut.slice(0, 5).map((i) => i.product).join(', ');
+    suggestions.push({
+      title: `Cut ${cut.length} zero/negligible-sales SKU${cut.length > 1 ? 's' : ''}`,
+      detail: `${names}${cut.length > 5 ? `, +${cut.length - 5} more` : ''} — free up facings for a better-performing item.`,
+    });
+  }
+
+  if (watch.length) {
+    const names = watch.slice(0, 5).map((i) => i.product).join(', ');
+    suggestions.push({
+      title: `Monitor ${watch.length} low-velocity item${watch.length > 1 ? 's' : ''}`,
+      detail: `${names}${watch.length > 5 ? `, +${watch.length - 5} more` : ''} — give it one more cycle before deciding whether to cut.`,
+    });
+  }
+
+  if (top.length) {
+    const names = top.slice(0, 5).map((i) => i.product).join(', ');
+    suggestions.push({
+      title: `Protect facings for ${top.length} top performer${top.length > 1 ? 's' : ''}`,
+      detail: `${names} are driving outsized revenue share — prioritize reordering these first and consider expanding shelf space.`,
+    });
+  }
+
+  const topCat = categoryMix[0];
+  if (topCat && topCat.share > 0.4) {
+    suggestions.push({
+      title: `${topCat.category} is overrepresented (${pct(topCat.share)} of revenue)`,
+      detail: 'A single category driving this much revenue is a concentration risk — diversify with 1-2 other categories to hedge against a supplier or trend shift.',
+    });
+  }
+
+  if (hasCost) {
+    const lowMargin = items
+      .filter((i) => i.margin !== null && i.revenue > 0 && i.share > 0.02 && i.margin / i.revenue < 0.15)
+      .sort((a, b) => (a.margin / a.revenue) - (b.margin / b.revenue));
+    if (lowMargin.length) {
+      const names = lowMargin.slice(0, 3).map((i) => i.product).join(', ');
+      suggestions.push({
+        title: `${lowMargin.length} high-volume item${lowMargin.length > 1 ? 's' : ''} with thin margins`,
+        detail: `${names} sell well but return under 15% margin — consider a price adjustment or renegotiating with the supplier.`,
+      });
+    }
+  }
+
+  if (!suggestions.length) {
+    suggestions.push({ title: 'No major flags this cycle', detail: 'Mix looks balanced — revisit after the next sales cycle.' });
+  }
+
+  return suggestions;
+}
+
+// Snapshots a DOM node (charts, tables, everything already rendered on screen)
+// into a multi-page PDF. Re-draws the same full-height image on each page,
+// shifted up by one page height each time, so each page reveals the next slice.
+async function exportNodeToPdf(node, filename) {
+  if (!node) return;
+  const canvas = await html2canvas(node, { scale: 2, backgroundColor: '#ffffff', useCORS: true });
+  const imgData = canvas.toDataURL('image/png');
+  const pdf = new jsPDF('p', 'mm', 'a4');
+  const pageWidth = pdf.internal.pageSize.getWidth();
+  const pageHeight = pdf.internal.pageSize.getHeight();
+  const imgWidth = pageWidth;
+  const imgHeight = (canvas.height * imgWidth) / canvas.width;
+
+  let heightLeft = imgHeight;
+  let position = 0;
+
+  pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+  heightLeft -= pageHeight;
+
+  while (heightLeft > 0) {
+    position -= pageHeight;
+    pdf.addPage();
+    pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+    heightLeft -= pageHeight;
+  }
+
+  pdf.save(filename);
 }
 
 /* ---------------------------------- component ---------------------------------- */
@@ -745,6 +838,21 @@ function LocationDetail({ location, analysis, tierEntry, mappingOpen, onToggleMa
   const mapping = location.mappingsBySheet[sheet.name] || {};
   const unmapped = ['sku', 'product', 'units', 'revenue'].filter((f) => !mapping[f]);
   const hasMultipleSheets = location.sheets.length > 1;
+  const suggestions = useMemo(() => buildSuggestions(analysis), [analysis]);
+  const reportRef = useRef(null);
+  const [pdfBusy, setPdfBusy] = useState(false);
+
+  async function handleDownloadPdf() {
+    setPdfBusy(true);
+    try {
+      const safeName = location.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+      await exportNodeToPdf(reportRef.current, `${safeName}-shelf-signal-report.pdf`);
+    } catch (e) {
+      console.error('PDF export failed', e);
+    } finally {
+      setPdfBusy(false);
+    }
+  }
 
   return (
     <div>
@@ -756,6 +864,7 @@ function LocationDetail({ location, analysis, tierEntry, mappingOpen, onToggleMa
         <div className="ss-header-actions">
           {tierEntry && <span className="ss-tier-badge" style={{ color: tierColor.c, background: tierColor.bg }}>{tierEntry.tier} tier</span>}
           <button className="ss-icon-btn" onClick={onCopy}><ClipboardCopy size={13} /> {copied ? 'Copied!' : 'Copy summary'}</button>
+          <button className="ss-icon-btn" onClick={handleDownloadPdf} disabled={pdfBusy}><FileDown size={13} /> {pdfBusy ? 'Generating…' : 'Download PDF'}</button>
           <button className="ss-icon-btn" onClick={onToggleMapping}>{mappingOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />} Column mapping</button>
         </div>
       </div>
@@ -794,6 +903,7 @@ function LocationDetail({ location, analysis, tierEntry, mappingOpen, onToggleMa
         </div>
       )}
 
+      <div ref={reportRef}>
       <div className="ss-kpi-row">
         <div className="ss-kpi"><div className="ss-kpi-label">Revenue</div><div className="ss-kpi-value">{money(analysis.totalRevenue)}</div></div>
         <div className="ss-kpi"><div className="ss-kpi-label">Units sold</div><div className="ss-kpi-value">{analysis.totalUnits.toLocaleString()}</div></div>
@@ -826,6 +936,16 @@ function LocationDetail({ location, analysis, tierEntry, mappingOpen, onToggleMa
         ))}
       </div>
 
+      <div className="ss-section-title"><Lightbulb size={15} /> Suggestions</div>
+      <ul className="ss-insight-list">
+        {suggestions.map((s, i) => (
+          <li className="ss-insight-item" key={i}>
+            <b>{s.title}</b>
+            <div className="ss-sub">{s.detail}</div>
+          </li>
+        ))}
+      </ul>
+
       <div className="ss-section-title">Recommendations</div>
       <div className="ss-flag-legend">
         {Object.entries(FLAG_META).map(([k, v]) => (
@@ -857,11 +977,15 @@ function LocationDetail({ location, analysis, tierEntry, mappingOpen, onToggleMa
 
       <div className="ss-section-title">Written summary</div>
       <div className="ss-summary-box">{buildSummaryText(location, analysis)}</div>
+      </div>
     </div>
   );
 }
 
 function RollupView({ locations, rollup }) {
+  const reportRef = useRef(null);
+  const [pdfBusy, setPdfBusy] = useState(false);
+
   if (locations.length === 0) {
     return <div className="ss-select-msg">Upload at least one location to see the rollup.</div>;
   }
@@ -875,12 +999,31 @@ function RollupView({ locations, rollup }) {
     Value: 'Lower revenue locations. Focus on tightening the SKU count, cutting duplicate facings, and leaning into value multi-packs rather than adding premium items.',
   };
 
+  async function handleDownloadPdf() {
+    setPdfBusy(true);
+    try {
+      await exportNodeToPdf(reportRef.current, 'shelf-signal-rollup-report.pdf');
+    } catch (e) {
+      console.error('PDF export failed', e);
+    } finally {
+      setPdfBusy(false);
+    }
+  }
+
   return (
     <div>
+      <div className="ss-header-row">
+        <div />
+        <div className="ss-header-actions">
+          <button className="ss-icon-btn" onClick={handleDownloadPdf} disabled={pdfBusy}><FileDown size={13} /> {pdfBusy ? 'Generating…' : 'Download PDF'}</button>
+        </div>
+      </div>
+
       {locations.length < 2 && (
         <div className="ss-hint" style={{ marginBottom: 16 }}>Add at least one more location for a full comparison — showing what's available so far.</div>
       )}
 
+      <div ref={reportRef}>
       <div className="ss-section-title">Revenue by location</div>
       {rollup.list.map((l) => (
         <div className="ss-rollup-bar-row" key={l.id}>
@@ -932,6 +1075,7 @@ function RollupView({ locations, rollup }) {
           ))}
         </ul>
       )}
+      </div>
     </div>
   );
 }

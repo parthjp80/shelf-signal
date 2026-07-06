@@ -9,6 +9,9 @@ your locations by revenue and suggests where premium vs. value SKUs belong.
 - Auto-detects CSV/Excel columns (SKU, product, category, units sold, revenue, cost)
 - Reads **all tabs** in multi-sheet Excel files; auto-picks the data-rich sheet
 - Flags each SKU as a top performer, steady, watch-list, or cut candidate based on velocity & revenue contribution
+- Categorizes products with no category column via an internet lookup (Open Food Facts) with a local keyword fallback
+- Surfaces a **Suggestions** panel per location — concrete, data-backed calls to action (cut candidates, thin-margin items, category concentration risk, etc.), separate from the raw per-SKU flag table
+- **Download PDF**: exports the shelf visualization, category mix, recommendations table, and suggestions as a shareable report (per-location or the cross-location rollup)
 - Builds cross-location rollups with tier strategy (High/Mid/Value) and expansion/consolidation suggestions
 - Persists all uploaded reports to a JSON file on a mounted Docker volume — survives restarts and is accessible from any device on your network
 
