@@ -356,8 +356,11 @@ export default function App() {
       const sheet = getActiveSheet(loc);
       if (!sheet) return;
       const mapping = loc.mappingsBySheet[sheet.name] || {};
-      if (mapping.category) return; // real category column already covers this location
       sheet.rows.forEach((row) => {
+        // Skip rows that already have a real category value from the mapped
+        // column — only rows with a blank/missing category need a lookup.
+        const mappedCategory = mapping.category ? String(row[mapping.category] || '').trim() : '';
+        if (mappedCategory) return;
         const productRaw = mapping.product ? row[mapping.product] : (mapping.sku ? row[mapping.sku] : '');
         const product = String(productRaw || '').trim();
         if (product && !(product.toLowerCase() in categoryOverrides)) needsLookup.add(product);
